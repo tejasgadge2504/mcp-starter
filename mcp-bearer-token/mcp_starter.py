@@ -170,9 +170,62 @@ async def job_finder(
 
     raise McpError(ErrorData(code=INVALID_PARAMS, message="Please provide either a job description, a job URL, or a search query in user_goal."))
 
+# --- Tool: set_reminder ---
+SetReminderDescription = RichToolDescription(
+    description="Set a reminder to send a WhatsApp message at the specified time.",
+    use_when="Use this when the user wants to receive a reminder via WhatsApp.",
+    side_effects="A WhatsApp message will be sent to the user's number at the specified time.",
+)
+
+class ReminderInput(BaseModel):
+    reminder_type: Annotated[str, Field(description="Type of reminder, e.g., 'hydration', 'exercise'")]
+    reminder_time: Annotated[str, Field(description="Time to send reminder, e.g., '2025-08-10 15:30:00' in ISO format")]
+    message: Annotated[str, Field(description="Message to send as the reminder")]
+
+@mcp.tool(description=SetReminderDescription.model_dump_json())
+async def set_reminder(input: ReminderInput) -> str:
+    """
+    Set a reminder and schedule a WhatsApp message to be sent at the specified time.
+    """
+    from datetime import datetime
+    import twilio
+    from twilio.rest import Client
+
+    # Parse the reminder time
+    try:
+        reminder_time = datetime.fromisoformat(input.reminder_time)
+        current_time = datetime.now()
+        if reminder_time <= current_time:
+            raise ValueError("Reminder time must be in the future.")
+    except ValueError as e:
+        raise McpError(ErrorData(code=INVALID_PARAMS, message=f"Invalid reminder time format. Use ISO format (e.g., '2025-08-10 15:30:00'). Error: {e}"))
+
+    # Schedule the reminder
+    async def send_reminder():
+        await asyncio.sleep((reminder_time - current_time).total_seconds())
+        # Twilio configuration (replace with your credentials)
+        account_sid = os.environ.get("TWILIO_ACCOUNT_SID")
+        auth_token = os.environ.get("TWILIO_AUTH_TOKEN")
+        twilio_phone = os.environ.get("TWILIO_PHONE_NUMBER")
+        if not all([account_sid, auth_token, twilio_phone]):
+            raise McpError(ErrorData(code=INTERNAL_ERROR, message="Twilio credentials not set in .env file."))
+
+        client = Client(account_sid, auth_token)
+        try:
+            client.messages.create(
+                body=input.message,
+                from_=twilio_phone,
+                to=MY_NUMBER
+            )
+            print(f"Reminder sent to {MY_NUMBER} at {reminder_time}")
+        except twilio.base.exceptions.TwilioRestException as e:
+            raise McpError(ErrorData(code=INTERNAL_ERROR, message=f"Failed to send WhatsApp message: {e}"))
+
+    # Schedule the task
+    asyncio.create_task(send_reminder())
+    return f"Reminder set for {input.reminder_type} at {input.reminder_time} with message: {input.message}"
 
 # Image inputs and sending images
-
 MAKE_IMG_BLACK_AND_WHITE_DESCRIPTION = RichToolDescription(
     description="Convert an image to black and white and save it.",
     use_when="Use this tool when the user provides an image URL and requests it to be converted to black and white.",
